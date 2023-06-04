@@ -7,4 +7,6 @@
 #include <stdlib.h>
 #include <wait.h>
 
+int daemonize();
+
 int create_listener(char *service);

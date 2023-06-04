@@ -5,6 +5,8 @@
 #include <unistd.h>
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <pthread.h>
 
 #define ERROR_IF_EQUAL(expression, error_code, error_signature, ...)  \
 if ((expression) == error_code) {  \
@@ -19,3 +21,5 @@ if ((expression) != error_code) {  \
 }
 
 int create_connection(char *node, char *service);
+
+void *reader(void *arg);

@@ -1,10 +1,25 @@
 #include "server.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <wait.h>
 
 enum { BUFFER_SIZE = 1000 };
+
+int daemonize() {
+    pid_t pid = fork();
+
+    if (pid != 0) {
+        exit(0);
+    }
+
+    if (setsid() < 0) {
+        return -1;
+    }
+
+    return 0;
+}
 
 int create_listener(char* service) {
     struct addrinfo *res = NULL;
@@ -45,10 +60,17 @@ int create_listener(char* service) {
 
 
 int main(int argc, char *argv[]) {
+    struct sigaction child_act = {.sa_handler = SIG_IGN};
+    sigaction(SIGCHLD, &child_act, NULL);
+
     int sock = create_listener(argv[1]);
 
     struct sockaddr_in client;
     socklen_t client_addrlen = sizeof(client);
+
+    if(daemonize() < 0) {
+        exit(EXIT_FAILURE);
+    }
 
     while (1) {
         int to_client = accept(sock, (struct sockaddr *)&client, &client_addrlen);
