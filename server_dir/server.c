@@ -77,6 +77,8 @@ int get_saved_sessions_number() {
 void handle_saving_session(int proc_pid, int client) {
     pid_t pid = fork();
     if (!pid) {
+        prctl(PR_SET_PDEATHSIG, SIGHUP);
+
         char *args[SIZE_OF_CRIU_ARGS];
         args[0] = "criu";
         args[1] = "dump";
@@ -217,6 +219,7 @@ void handle_spawn(int sock, int client) {
         pthread_join(checking_finish, NULL);
         exit(0);
     } else {
+        prctl(PR_SET_PDEATHSIG, SIGHUP);
         dup2(pipefd[0], STDIN_FILENO);
         dup2(client, STDOUT_FILENO);
         close(client);
@@ -266,6 +269,7 @@ void update_start_time() {
 
 int main(int argc, char *argv[]) {
     signal(SIGINT, free_server);
+    signal(SIGTERM, free_server);
     struct sigaction child_act = {.sa_handler = complete_session_handler};
     sigemptyset(&child_act.sa_mask);
     sigaddset(&child_act.sa_mask, SIGCHLD);
@@ -300,6 +304,7 @@ int main(int argc, char *argv[]) {
 
         pid_t pid = fork();
         if (!pid) {
+            prctl(PR_SET_PDEATHSIG, SIGHUP);
 
             // check if we have http request
             if (check_and_handle_http(client)) {

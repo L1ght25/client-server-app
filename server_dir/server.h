@@ -12,6 +12,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/time.h>
+#include <sys/prctl.h>
 #include "../common_part/common.h"
 #include "../net_util/util.h"
 #include "../tools/tools.h"
