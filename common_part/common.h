@@ -4,6 +4,7 @@ enum {
     LIST,
     ATTACH,
     KILL,
+    LIST_ACTIVE,
 
     // signals to server
     SAVE_SESSION = -1,

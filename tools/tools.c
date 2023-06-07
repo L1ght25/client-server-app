@@ -58,3 +58,27 @@ int atomic_read_file(const char* filename, char* data, size_t size) {
     return 0;
 }
 
+int init_array(DynArray *array, int cap) {
+    array->data = calloc(cap, sizeof(*(array->data)));
+    if (!array->data) {
+        return -1;
+    }
+    array->size = 0;
+    array->capacity = cap;
+    return 0;
+}
+
+int add_elem_to_array(DynArray *array, int elem) {
+    if (array->size + 1 > array->capacity) {
+        size_t newcap = 2 * (array->capacity + 1);
+        int *tmp = realloc(array->data, newcap * sizeof(*tmp));
+        if (!tmp) {
+            free(array->data);
+            return -1;
+        }
+        array->data = tmp;
+        array->capacity = newcap;
+    }
+    array->data[array->size++] = elem;
+    return 0;
+}

@@ -58,7 +58,7 @@ int main(int argc, char *argv[]) {
     ERROR_IF_EQUAL((server_socket = create_connection(argv[1], argv[1] + border + 1)), -1, "Error connecting to server...\n");
 
     int n_bytes;
-    char buffer[BUFFER_SIZE];
+    char buffer[BUFFER_SIZE] = {0};
 
     if (!strcmp(argv[2], "spawn")) {
         // process type part
@@ -74,18 +74,25 @@ int main(int argc, char *argv[]) {
 
         //stdin
         while ((n_bytes = read(STDIN_FILENO, buffer, BUFFER_SIZE)) > 0) {
-            write(server_socket, &n_bytes, sizeof(n_bytes));
-            write(server_socket, buffer, n_bytes);
+            send_data(server_socket, n_bytes, buffer);
         }
         send_signal_to_server(END_OF_INPUT, server_socket);
 
         pthread_join(thread, NULL);
-        close(server_socket);
-    } else if (!strcmp(argv[2], "list")) {
+    } else if (argc == 3 && !strcmp(argv[2], "list")) {
         ERROR_IF_EQUAL((send_proc_type_to_server(LIST, server_socket)), -1, "Error sending type to server\n");
         // TODO
     } else if (!strcmp(argv[2], "attach")) {
         ERROR_IF_EQUAL((send_proc_type_to_server(ATTACH, server_socket)), -1, "Error sending type to server\n");
         // TODO
+    } else if (argc > 3 && !strcmp(argv[2], "list") && !strcmp(argv[3], "active")) {
+        ERROR_IF_EQUAL((send_proc_type_to_server(LIST_ACTIVE, server_socket)), -1, "Error sending type to server\n");
+
+        while ((n_bytes = recv(server_socket, buffer, BUFFER_SIZE, 0)) > 0) {
+            printf("%s", buffer);
+            memset(buffer, 0, n_bytes);
+        }
     }
+    
+    close(server_socket);
 }

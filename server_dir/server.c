@@ -1,5 +1,35 @@
 #include "server.h"
 
+static const char *SAVED_SESSIONS_CONTEXT = "./saved_sessions_context.txt";
+static const char *ALL_SESSIONS_CONTEXT = "./all_sessions_context.txt";
+static const char *COMPLETED_SESSIONS_CONTEXT = "./completed_sessions_context.txt";
+static int all_sessions_count = 0;
+static volatile int completed_sessions_count = 0;
+static DynArray pids;
+
+void free_server(int sig) {
+    free(pids.data);
+    remove(ALL_SESSIONS_CONTEXT);
+    remove(COMPLETED_SESSIONS_CONTEXT);
+    exit(EXIT_SUCCESS);
+}
+
+void complete_session_handler(int sig) {
+    while (waitpid(-1, 0, WNOHANG) > 0) {
+        completed_sessions_count++;
+    }
+}
+
+void publish_sessions_count(int sig) {
+    char buffer[MAX_SESSIONS_COUNT_LEN] = {0};
+    int n_bytes = snprintf(buffer, MAX_SESSIONS_COUNT_LEN, "%d", all_sessions_count);
+    atomic_write_file(ALL_SESSIONS_CONTEXT, buffer, n_bytes);
+
+    memset(buffer, 0, MAX_SESSIONS_COUNT_LEN);
+    n_bytes = snprintf(buffer, MAX_SESSIONS_COUNT_LEN, "%d", completed_sessions_count);
+    atomic_write_file(COMPLETED_SESSIONS_CONTEXT, buffer, n_bytes);
+}
+
 int daemonize() {
     pid_t pid = fork();
 
@@ -23,22 +53,22 @@ void *handle_finishing_proc(void *arg) {
     exit(0);
 }
 
-int increment_sessions_number() {
+int increment_saved_sessions_number() {
     char buffer[MAX_SESSIONS_COUNT_LEN] = {0};
     int count_sessions = 0;
-    if (!atomic_read_file("./sessions_context.txt", buffer, MAX_SESSIONS_COUNT_LEN)) {
+    if (!atomic_read_file(SAVED_SESSIONS_CONTEXT, buffer, MAX_SESSIONS_COUNT_LEN)) {
         count_sessions = atoi(buffer);
     }
     ++count_sessions;
-    snprintf(buffer, MAX_SESSIONS_COUNT_LEN, "%d", count_sessions);
-    atomic_write_file("./sessions_context.txt", buffer, MAX_SESSIONS_COUNT_LEN);
+    int n_bytes = snprintf(buffer, MAX_SESSIONS_COUNT_LEN, "%d", count_sessions);
+    atomic_write_file(SAVED_SESSIONS_CONTEXT, buffer, n_bytes);
     return count_sessions;
 }
 
-int get_sessions_number() {
+int get_saved_sessions_number() {
     char buffer[MAX_SESSIONS_COUNT_LEN] = {0};
     int count_sessions = 0;
-    if (!atomic_read_file("./sessions_context.txt", buffer, MAX_SESSIONS_COUNT_LEN)) {
+    if (!atomic_read_file(SAVED_SESSIONS_CONTEXT, buffer, MAX_SESSIONS_COUNT_LEN)) {
         count_sessions = atoi(buffer);
     }
     return count_sessions;
@@ -57,7 +87,7 @@ void handle_saving_session(int proc_pid, int client) {
 
         args[4] = "-D";
         char *path = calloc(PATH_MAX, sizeof(*path));
-        snprintf(path, PATH_MAX, "./session_%d", get_sessions_number());
+        snprintf(path, PATH_MAX, "./session_%d", get_saved_sessions_number());
         char *real_path = calloc(PATH_MAX, sizeof(*path));
         realpath(path, real_path);
         free(path);
@@ -73,7 +103,7 @@ void handle_saving_session(int proc_pid, int client) {
         int dump_status;
         waitpid(pid, &dump_status, 0);
 
-        int count_sessions = increment_sessions_number();
+        int count_sessions = increment_saved_sessions_number();
         char buffer[BUFFER_SIZE];
 
         int n_bytes;
@@ -97,7 +127,7 @@ void handle_kill_session(int proc_pid, int client) {
 
 int receive_args_from_client(int client, char ***argv) {
     int cnt_of_args;
-    int n_bytes = read(client, &cnt_of_args, sizeof(cnt_of_args));
+    int n_bytes = recv(client, &cnt_of_args, sizeof(cnt_of_args), MSG_WAITALL);
     *argv = calloc(cnt_of_args, sizeof(**argv));
 
     int size_of_arg;
@@ -108,8 +138,8 @@ int receive_args_from_client(int client, char ***argv) {
             free(*argv);
             return -1;
         }
-        (*argv)[i] = calloc(size_of_arg, sizeof(**argv[i]));
-        n_bytes = recv(client, *argv[i], size_of_arg, MSG_WAITALL);
+        (*argv)[i] = calloc(size_of_arg, sizeof(***argv));
+        n_bytes = recv(client, (*argv)[i], size_of_arg, MSG_WAITALL);
         if (n_bytes <= 0) {
             free(*argv);
             return -1;
@@ -142,6 +172,18 @@ void proxy_event_loop(int client, int pipe_to_proc, int proc_pid) {
         } else {
             break;
         }
+    }
+}
+
+void handle_active_sessions(int client) {
+    char buffer[BUFFER_SIZE] = {0};
+    int begin_ind = completed_sessions_count;
+    int n_bytes = snprintf(buffer, BUFFER_SIZE, "Current active sessions:\n");
+    write(client, buffer, n_bytes);
+    for (int i = begin_ind; i < pids.size; ++i) {
+        memset(buffer, 0, n_bytes);
+        n_bytes = snprintf(buffer, BUFFER_SIZE, "\tPID: %d\n", pids.data[i]);
+        write(client, buffer, n_bytes);
     }
 }
 
@@ -205,7 +247,7 @@ void handle_http_request(int client, char *command) {
     int header_bytes;
 
     if (!strcmp(command, "list")) {
-        n_bytes = snprintf(buffer, BUFFER_SIZE, "There are %d saved sessions now\n", get_sessions_number());
+        n_bytes = snprintf(buffer, BUFFER_SIZE, "There are %d saved sessions now\n", get_saved_sessions_number());
         header_bytes = snprintf(header, BUFFER_SIZE, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n", n_bytes);
     } else {
         n_bytes = snprintf(buffer, BUFFER_SIZE, "Unknown command\n");
@@ -215,11 +257,35 @@ void handle_http_request(int client, char *command) {
     send(client, buffer, n_bytes, 0);
 }
 
+void update_start_time() {
+    time_t current_time = time(NULL);
+    char buffer[MAX_TIME_SECONDS_LEN];
+    int n_bytes = snprintf(buffer, MAX_TIME_SECONDS_LEN, "%ld", current_time);
+    atomic_write_file("./time_start.txt", buffer, n_bytes);
+}
+
 int main(int argc, char *argv[]) {
-    struct sigaction child_act = {.sa_handler = SIG_IGN};
+    signal(SIGINT, free_server);
+    struct sigaction child_act = {.sa_handler = complete_session_handler};
+    sigemptyset(&child_act.sa_mask);
+    sigaddset(&child_act.sa_mask, SIGCHLD);
+    child_act.sa_flags = SA_RESTART | SA_NOCLDSTOP;
     sigaction(SIGCHLD, &child_act, NULL);
 
+    struct itimerval it_val;
+    signal(SIGALRM, publish_sessions_count);
+    it_val.it_value.tv_sec = UPDATE_INTERVAL_SEC;
+    it_val.it_value.tv_usec = 0;
+    it_val.it_interval = it_val.it_value;
+    setitimer(ITIMER_REAL, &it_val, NULL);
+
+    update_start_time();
+
     int sock = create_listener(argv[1]);
+
+    if (init_array(&pids, DEFAULT_CAPACITY_PIDS)) {
+        perror("Could not initialize dyn-array\n");
+    }
 
     if(daemonize() < 0) {
         exit(EXIT_FAILURE);
@@ -230,13 +296,13 @@ int main(int argc, char *argv[]) {
 
     while (1) {
         int client = accept(sock, (struct sockaddr *)&client_addr, &client_addrlen);
+        ++all_sessions_count;
 
         pid_t pid = fork();
         if (!pid) {
 
             // check if we have http request
             if (check_and_handle_http(client)) {
-                sleep(1);
                 exit(EXIT_SUCCESS);
             }
 
@@ -248,6 +314,8 @@ int main(int argc, char *argv[]) {
                 case SPAWN:
                     handle_spawn(sock, client);
                     break;
+                case LIST_ACTIVE:
+                    handle_active_sessions(client);
                 // case LIST:
                     // handle_list();
                 // case ATTACH:
@@ -260,6 +328,9 @@ int main(int argc, char *argv[]) {
             }
             exit(EXIT_SUCCESS);
         } else {
+            if (add_elem_to_array(&pids, pid)) {
+                exit(EXIT_FAILURE);
+            }
             close(client);
         }
     }
